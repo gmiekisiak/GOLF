@@ -1,4 +1,3 @@
-```cpp
 #include <Adafruit_TinyUSB.h>
 #include <Wire.h>
 #define DRV_ADDR 0x5A
@@ -106,6 +105,3 @@ void loop(){
     while(1) delay(1000);
   }
 }
-```
-
-this shit is awesome but only for like a second

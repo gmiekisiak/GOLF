@@ -1,0 +1,111 @@
+```cpp
+#include <Adafruit_TinyUSB.h>
+#include <Wire.h>
+#define DRV_ADDR 0x5A
+
+void w(uint8_t r, uint8_t v){
+  Wire.beginTransmission(DRV_ADDR);
+  Wire.write(r); Wire.write(v);
+  Wire.endTransmission();
+}
+uint8_t rd(uint8_t reg){
+  Wire.beginTransmission(DRV_ADDR);
+  Wire.write(reg); Wire.endTransmission(false);
+  Wire.requestFrom(DRV_ADDR, (uint8_t)1);
+  return Wire.available() ? Wire.read() : 0xFF;
+}
+
+bool autoCalLRA() {
+  w(0x1D, 0xA8);          // CONTROL3: LRA_OPEN_LOOP = 0
+  w(0x01, 0x07);          // MODE = auto-calibration
+  w(0x0C, 0x01);          // GO
+  unsigned long t0 = millis();
+  unsigned long lastDot = 0;
+  while ((rd(0x0C) & 0x01) && (millis() - t0 < 5000)) {
+    delay(10);
+    if (millis() - lastDot > 250) {
+      Serial.print(".");
+      lastDot = millis();
+    }
+  }
+  Serial.println();
+  if (rd(0x0C) & 0x01) {
+    Serial.println("  GO bit never cleared");
+    return false;
+  }
+  if (rd(0x00) & 0x08) {
+    Serial.println("  DIAG_RESULT=fail");
+    return false;
+  }
+  return true;
+}
+
+void setup(){
+  Serial.begin(115200);
+  while(!Serial && millis()<3000){}
+  delay(500);
+  Wire.begin();
+  Wire.setClock(100000);
+  delay(50);
+
+  Wire.beginTransmission(0x5A);
+  if (Wire.endTransmission() != 0) {
+    Serial.println("0x5A gone, power-cycle");
+    return;
+  }
+
+  // ---- Soft reset + base config ----
+  w(0x01, 0x80); delay(50);
+  w(0x01, 0x00); delay(10);
+
+  // Gentler cal drive — chip will find its own resonance
+  w(0x16, 0x3E);               // RATEDV: ~1.5 Vrms
+  w(0x17, 0x60);               // CLAMPV: ~2.0 V peak
+  w(0x1A, 0xB6);               // FEEDBACK_CONTROL: LRA, brake 4x
+  w(0x1B, 0x93);               // CONTROL1: default drive time
+  w(0x1C, 0xF5);               // CONTROL2 (signed RTP, matches what worked)
+  w(0x1D, 0xA8);               // CONTROL3: closed-loop
+
+  // ---- Auto-cal — trust whatever it finds ----
+  Serial.println("Auto-cal...");
+  bool ok = autoCalLRA();
+
+  if (ok) {
+    uint8_t comp   = rd(0x18);
+    uint8_t bemf   = rd(0x19);
+    uint8_t period = rd(0x22);
+    float fHz = (period > 0) ? 1.0f / (period * 98.46e-6f) : 0.0f;
+    Serial.print("Closed-loop OK. f=");
+    Serial.print(fHz); Serial.print(" Hz  comp=0x");
+    Serial.print(comp, HEX); Serial.print(" bemf=0x");
+    Serial.println(bemf, HEX);
+    // No band-check — keep closed-loop at whatever resonance was found
+  } else {
+    Serial.println("Auto-cal FAILED");
+    while(1) delay(1000);
+  }
+
+  w(0x02, 0xA0);               // RTP input level
+  Serial.println("BRRRT");
+}
+
+void loop(){
+  w(0x01, 0x05);               // RTP mode
+  delay(20);
+  uint8_t vbat   = rd(0x21);
+  uint8_t status = rd(0x00);
+  w(0x01, 0x40);               // standby
+  delay(20);
+
+  Serial.print("VBAT=0x"); Serial.print(vbat, HEX);
+  Serial.print(" STAT=0x"); Serial.println(status, HEX);
+
+  if (vbat == 0xFF || status == 0xFF) {
+    Serial.println("BROWNOUT — halting");
+    w(0x01, 0x40);
+    while(1) delay(1000);
+  }
+}
+```
+
+this shit is awesome but only for like a second
